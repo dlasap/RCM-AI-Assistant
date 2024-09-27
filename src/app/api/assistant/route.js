@@ -4,15 +4,25 @@ import fs from "fs";
 import path from "path";
 import util from "util";
 
+import nextConnect from "next-connect";
+import { NextResponse } from "next/server";
+
 const unlinkFile = util.promisify(fs.unlink);
 
-// Multer setup to handle file uploads
-const upload = multer({ dest: "uploads/" });
-const uploadMiddleware = upload.single("file");
-
-// Init OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.NEXT_PUBLIC_OPEN_AI_KEY,
+// Set up multer storage configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.resolve("./uploads");
+    console.log("%c  uploadPath:", "color: #0e93e0;background: #aaefe5;", uploadPath);
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true }); // Create the folder if it doesn't exist
+    }
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    console.log("%c  xxfile:", "color: #0e93e0;background: #aaefe5;", file);
+    cb(null, `${Date.now()}-${file.originalname}`); // Append timestamp to avoid filename conflicts
+  },
 });
 
 // Middleware to handle file uploads
@@ -22,44 +32,88 @@ export const config = {
   },
 };
 
-export async function POST(req, res) {
-  console.log("X FILE", req.body);
+// Initialize multer with the storage configuration
+const upload = multer({ storage: storage });
 
-  const formData = await req.body.formData(); // process file as FormData
-  const file = formData.get("file"); // retrieve the single file from FormData
-  const vectorStoreId = await getOrCreateVectorStore(); // get or create vector store
+// Init OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.NEXT_PUBLIC_OPEN_AI_KEY,
+});
 
-  // upload using the file stream
-  const openaiFile = await openai.files.create({
-    file: file,
-    purpose: "assistants",
-  });
+// Set up a handler with nextConnect to integrate multer with Next.js
 
-  // add file to vector store
-  await openai.beta.vectorStores.files.create(vectorStoreId, {
-    file_id: openaiFile.id,
-  });
+export async function POST(request) {
+  try {
+    const res = NextResponse;
+    const formData = await request.formData();
+    const file = formData.get("file");
+    const prompt = formData.get("prompt");
 
-  const response = await openai.createChatCompletion({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "system",
-        content: "You are a knowledgeable assistant.",
+    upload.single("file")(request, res, async function (err) {
+      if (err) {
+        console.error("Multer error:", err);
+        return res.status(500).json({ error: "File upload failed" });
+      }
+    });
+    // Access uploaded file via req.file
+    console.log("Uploaded file:", request.file, {
+      file: request.file,
+      res,
+      request,
+    });
+
+    const vectorStoreId = await getOrCreateVectorStore(); // get or create vector store
+
+    // upload using the file stream
+    const openaiFile = await openai.files.create({
+      file: file,
+      purpose: "assistants",
+    });
+
+    // add file to vector store
+    await openai.beta.vectorStores.files.create(vectorStoreId, {
+      file_id: openaiFile.id,
+    });
+
+    // Create thread
+    const thread = await openai.beta.threads.create();
+
+    const assistant = await openai.beta.assistants.retrieve(process.env.NEXT_PUBLIC_OPEN_AI_ASSISTANT_ID);
+
+    const message = await openai.beta.threads.messages.create(thread.id, {
+      role: "user",
+      content: prompt,
+    });
+
+    let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
+      assistant_id: assistant.id,
+      instructions: `Please address the user as a professional RCM user. The user has a premium account and wants to know more about the files uploaded if ever. Also remove unnecessary or "source" strings on the response.`,
+      response_format: {
+        type: "text",
       },
-      {
-        role: "user",
-        content: `Use the following file content as your base knowledge:\n\n${openaiFile}`,
-      },
-    ],
-  });
+      temperature: 0.3,
+    });
 
-  console.log("XXXXXXXX", response);
-  return res
-    .status(200)
-    .json({ response: response.data.choices[0].message.content });
+    let resultResponse = "";
+
+    if (run.status === "completed") {
+      const messages = await openai.beta.threads.messages.list(run.thread_id);
+      console.log("%c  TEST messages:", "color: #0e93e0;background: #aaefe5;", messages);
+      for (const message of messages.data.reverse()) {
+        if (message.role === "assistant") resultResponse = message.content[0].text.value;
+        console.log(`${message.role} > ${message.content[0].text.value}`);
+      }
+    } else {
+      console.log(run.status);
+    }
+
+    // Send response
+    return res.json({ message: "File uploaded successfully", file: request.file, response: resultResponse });
+  } catch (error) {
+    console.error("Error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
 }
-
 export function GET(req, res) {
   return new Response(
     JSON.stringify({
@@ -75,9 +129,7 @@ export function GET(req, res) {
 }
 
 const getOrCreateVectorStore = async () => {
-  const assistant = await openai.beta.assistants.retrieve(
-    process.env.NEXT_PUBLIC_OPEN_AI_ASSISTANT_ID
-  );
+  const assistant = await openai.beta.assistants.retrieve(process.env.NEXT_PUBLIC_OPEN_AI_ASSISTANT_ID);
 
   // if the assistant already has a vector store, return it
   if (assistant.tool_resources?.file_search?.vector_store_ids?.length > 0) {
@@ -87,15 +139,13 @@ const getOrCreateVectorStore = async () => {
   const vectorStore = await openai.beta.vectorStores.create({
     name: "reliability-assistant-vector-store",
   });
-  await openai.beta.assistants.update(
-    process.env.NEXT_PUBLIC_OPEN_AI_ASSISTANT_ID,
-    {
-      tool_resources: {
-        file_search: {
-          vector_store_ids: [vectorStore.id],
-        },
+  await openai.beta.assistants.update(process.env.NEXT_PUBLIC_OPEN_AI_ASSISTANT_ID, {
+    tool_resources: {
+      file_search: {
+        vector_store_ids: [vectorStore.id],
       },
-    }
-  );
+    },
+  });
   return vectorStore.id;
 };
+
