@@ -26,11 +26,11 @@ const storage = multer.diskStorage({
 });
 
 // Middleware to handle file uploads
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+// export const config = {
+//   api: {
+//     bodyParser: false,
+//   },
+// };
 
 // Initialize multer with the storage configuration
 const upload = multer({ storage: storage });
