@@ -107,7 +107,8 @@ export async function POST(request) {
 
     let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
       assistant_id: assistant.id,
-      instructions: `Please address the user as a professional RCM user. The user has a premium account and wants to know more about the most recent file uploaded if ever. Also remove unnecessary or "source" strings on the response.`,
+      instructions: `Please address the user as a professional RCM user. The user has a premium account and wants to know more about the most recent file uploaded if ever. Also remove unnecessary or "source" strings on the response.
+      Base the response from the most recent file uploaded - ${vectorFile.id}`,
       response_format: {
         type: "text",
       },
