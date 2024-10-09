@@ -8,6 +8,8 @@ import nextConnect from "next-connect";
 import { NextResponse } from "next/server";
 import { each } from "bluebird";
 
+export const maxDuration = 60; // This function can run for a maximum of 60 seconds
+
 const unlinkFile = util.promisify(fs.unlink);
 
 // Set up multer storage configuration
@@ -88,7 +90,7 @@ export async function POST(request) {
     const fileLists = await openai.beta.vectorStores.files.list(vectorStoreId);
     const x = await openai.beta.vectorStores.list();
     console.log("FILE LIST", {
-      data: fileLists.data,
+      // data: fileLists.data,
       x: x.data,
       vectorStoreId,
     });
