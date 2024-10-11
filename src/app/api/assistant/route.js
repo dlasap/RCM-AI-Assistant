@@ -114,7 +114,7 @@ export async function POST(request) {
       response_format: {
         type: "text",
       },
-      temperature: 0.2,
+      temperature: 0.15,
     });
 
     let resultResponse = "";
